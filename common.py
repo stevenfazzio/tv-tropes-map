@@ -79,6 +79,24 @@ def write_bytes_atomic(data: bytes, output_path: Path) -> None:
         raise
 
 
+def write_npz_atomic(output_path: Path, check=None, **arrays) -> None:
+    """np.savez to a temp file, optionally verify it with check(loaded), then swap in."""
+    import numpy as np
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=output_path.parent, suffix=".npz")
+    os.close(fd)
+    try:
+        np.savez(tmp, **arrays)
+        if check is not None:
+            check(np.load(tmp))
+        _match_or_default_mode(Path(tmp), output_path)
+        os.replace(tmp, output_path)
+    except BaseException:
+        os.unlink(tmp)
+        raise
+
+
 def write_parquet_safely(df, output_path: Path) -> None:
     """Write df to a temp file, verify rows and schema from the footer, then swap in."""
     output_path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blind Namer Comparison</title>
+<style>
+  :root {
+    --bg: #f7f6f3; --card: #ffffff; --ink: #1d1c1a; --muted: #6b675f; --line: #e3e0d8;
+    --accent: #2f6f9f; --accent-soft: #e4eef6; --warn: #a3412a; --warn-soft: #f6e5df; --ok: #2f7a4a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161616; --card: #202020; --ink: #ecebe7; --muted: #a29e95; --line: #343331;
+      --accent: #7fb4dd; --accent-soft: #23323d; --warn: #e7957f; --warn-soft: #3a2621; --ok: #7cc79a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 16px; }
+  .bar { position: sticky; top: 0; z-index: 2; background: var(--bg); padding: 10px 0; border-bottom: 1px solid var(--line);
+         display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .bar .progress { font-weight: 600; margin-right: auto; }
+  button { font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); padding: 6px 12px; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  .summary { display: none; margin: 16px 0; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; overflow-x: auto; }
+  .revealed .summary { display: block; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 600; }
+  .note { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin: 16px 0; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+  .field { display: grid; grid-template-columns: 110px 1fr; gap: 8px; margin: 4px 0; }
+  .field .k { color: var(--muted); font-size: 13px; padding-top: 1px; }
+  .field .v { font-size: 14px; }
+  .titles { margin: 0; padding-left: 18px; }
+  .options { display: grid; gap: 8px; margin-top: 12px; }
+  .opt { text-align: left; display: grid; grid-template-columns: 28px 1fr auto; gap: 10px; align-items: start; padding: 10px 12px; }
+  .opt .letter { font-weight: 700; color: var(--muted); }
+  .opt .name { font-weight: 500; }
+  .opt[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+  .opt[aria-pressed="true"] .letter { color: var(--accent); }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  .chip { font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+  .chip.bad { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+  .chip.model { display: none; color: var(--accent); background: var(--accent-soft); border-color: transparent; font-weight: 600; }
+  .chip.rank { display: none; }
+  .revealed .chip.model, .revealed .chip.rank { display: inline-block; }
+  pre { white-space: pre-wrap; word-break: break-word; margin: 0; font-size: 13px; font-family: ui-monospace, Menlo, monospace; }
+  @media (max-width: 600px) { .field { grid-template-columns: 1fr; gap: 0; } .opt { grid-template-columns: 22px 1fr; } .chips { grid-column: 2; justify-content: flex-start; } }
+</style>
+</head>
+<body>
+<main id="app">
+  <h1>Blind namer comparison</h1>
+  <p class="sub" id="sub"></p>
+  <div class="bar">
+    <span class="progress" id="progress"></span>
+    <button id="reset">Clear picks</button>
+    <button id="reveal" class="primary">Reveal models</button>
+  </div>
+  <section class="summary" id="summary"></section>
+  <div id="cards"></div>
+</main>
+<script>
+const DATA = /*DATA*/null;
+const LABEL = { "claude-opus-5-5": "Opus 5.5", "claude-sonnet-5-5": "Sonnet 5.5", "claude-haiku-5-5": "Haiku 5.5" };
+const LEVEL = ["Finest level", "Level 2", "Level 3", "Coarsest level"];
+const KEY = "namer-test-picks-v1";
+let picks = {};
+try { picks = JSON.parse(localStorage.getItem(KEY) || "{}"); } catch (e) { picks = {}; }
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(picks)); } catch (e) {} };
+
+function el(tag, attrs = {}, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) k === "class" ? (n.className = v) : n.setAttribute(k, v);
+  for (const kid of kids) if (kid != null) n.append(kid);
+  return n;
+}
+function field(k, v) { return el("div", { class: "field" }, el("div", { class: "k" }, k), el("div", { class: "v" }, v)); }
+function pretty(raw) {
+  try { const m = raw.match(/\{[\s\S]*\}/); return JSON.stringify(JSON.parse(m[0]), null, 2); } catch (e) { return raw; }
+}
+
+document.getElementById("sub").textContent =
+  `${DATA.items.length} naming prompts captured from a dry run of the "${DATA.variant}" variant at min cluster size ` +
+  `${DATA.min_cluster_size}, each answered by three models. Pick the best name for each region; models stay hidden until you reveal them.`;
+
+const cards = document.getElementById("cards");
+DATA.items.forEach((it, i) => {
+  const card = el("article", { class: "card" });
+  if (it.kind === "topic") {
+    card.append(el("h2", {}, `${LEVEL[it.layer] || "Level " + (it.layer + 1)} · asked for ${it.words[0]}–${it.words[1]} words`));
+    card.append(field("Keywords", it.keywords.slice(0, 14).join(", ")));
+    if (it.subtopics.length) card.append(field("Sub-regions", it.subtopics.join(" · ") + "  (dry-run placeholders)"));
+    card.append(field("Sample tropes", el("ul", { class: "titles" }, ...it.titles.map(t => el("li", {}, t)))));
+  } else {
+    card.append(el("h2", {}, "Disambiguation · rename a group of similar regions"));
+    card.append(field("Regions", `${(it.titles || []).length} sample tropes across the group`));
+  }
+  const opts = el("div", { class: "options" });
+  it.order.forEach((model, j) => {
+    const a = it.answers[model];
+    const chips = el("div", { class: "chips" });
+    if (it.kind === "topic") {
+      if (a.name == null) chips.append(el("span", { class: "chip bad" }, "didn't parse"));
+      else chips.append(el("span", { class: "chip" + (a.in_range ? "" : " bad") }, `${a.n_words} words`));
+      if (a.rank != null) chips.append(el("span", { class: "chip rank" }, `own region #${a.rank} of ${a.n_regions}`));
+    }
+    chips.append(el("span", { class: "chip model" }, LABEL[model] || model));
+    const body = it.kind === "topic" && a.name != null ? el("span", { class: "name" }, a.name) : el("pre", {}, pretty(a.raw));
+    const b = el("button", { class: "opt", "aria-pressed": String(picks[i] === model) },
+      el("span", { class: "letter" }, "ABC"[j]), body, chips);
+    b.addEventListener("click", () => { picks[i] = picks[i] === model ? undefined : model; save(); render(); });
+    b.dataset.item = i; b.dataset.model = model;
+    opts.append(b);
+  });
+  card.append(opts);
+  cards.append(card);
+});
+
+function render() {
+  document.querySelectorAll(".opt").forEach(b => b.setAttribute("aria-pressed", String(picks[b.dataset.item] === b.dataset.model)));
+  const n = Object.values(picks).filter(Boolean).length;
+  document.getElementById("progress").textContent = `Picked ${n} of ${DATA.items.length}`;
+  const tally = Object.fromEntries(DATA.models.map(m => [m, 0]));
+  Object.values(picks).forEach(m => { if (m) tally[m] += 1; });
+  const pct = x => typeof x === "number" ? Math.round(x * 100) + "%" : x;
+  const rows = DATA.models.map(m => {
+    const s = DATA.summary[m];
+    return el("tr", {}, ...[LABEL[m], tally[m], pct(s.in_range), s.median_words, pct(s.finest_rank1), pct(s.finest_top5),
+      s.finest_median_rank, s.coarse_rank1, "$" + s.cost_usd.toFixed(3)].map((v, k) => el(k ? "td" : "td", {}, String(v))));
+  });
+  const head = el("tr", {}, ...["Model", "Your picks", "In length", "Median words", "Finest: own #1", "Top 5", "Median rank", "Coarser: own #1", "Cost"].map(h => el("th", {}, h)));
+  const summary = document.getElementById("summary");
+  summary.replaceChildren(el("table", {}, el("thead", {}, head), el("tbody", {}, ...rows)),
+    el("p", { class: "note" }, "“Own #1”: the name, embedded with the map's embedder, is closer to its own region's centre than to any other region's in that level. It rewards distinctive names and also long keyword lists, so read it next to the length column."));
+}
+document.getElementById("reveal").addEventListener("click", e => {
+  const on = document.getElementById("app").classList.toggle("revealed");
+  e.target.textContent = on ? "Hide models" : "Reveal models";
+});
+document.getElementById("reset").addEventListener("click", () => { picks = {}; save(); render(); });
+render();
+</script>
+</body>
+</html>
