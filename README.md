@@ -39,6 +39,13 @@ Some choices were settled by side-by-side tests rather than defaults:
 - **No "Tropes" in region names.** On a map where every point is a trope, the
   word adds nothing, so the naming prompt asks for it to be left out, except for
   regions about tropes themselves (Subverted Trope, Invoked Trope).
+- **Primary medium rule.** `experiments/compare_medium_rules.py` puts two rules
+  on one map as colormaps: the medium holding at least half of a trope's
+  examples, and a medium with at least 3× its share of all examples on the wiki
+  (and at least 25% of the trope's). The second colours 29% of tropes rather
+  than 8% and gives small media a chance, but it sets a different bar for each
+  medium and scatters the colour (a coloured trope's neighbours share its colour
+  at 3.5× chance, against 6.3×), so the map keeps the 50% rule.
 
 ## Reproducing
 
