@@ -59,9 +59,9 @@ PROMINENCE_CMAP = "viridis"
 # DataMapPlot fixes deck.gl's scroll-zoom speed at 0.01 in datamap.js and offers no
 # option, so the page resets it once the map exists. deck.gl 9.1 scales the view by
 # 2 / (1 + e^-|delta * speed|) per wheel event, at most one zoom level: a mouse notch
-# (delta ~100) zooms 0.55 levels at 0.01 and 0.82 at 0.02, and a trackpad, whose
-# events carry small deltas, zooms about twice as fast.
-ZOOM_SPEED = 0.02
+# (delta ~100) zooms 0.55 levels at 0.01 and 0.97 at 0.04, close to that cap, and a
+# trackpad, whose events carry small deltas, zooms about four times as fast.
+ZOOM_SPEED = 0.04
 SET_ZOOM_SPEED = (
     "datamap.deckgl.setProps({controller: "
     f"{{scrollZoom: {{speed: {ZOOM_SPEED}, smooth: true}}}}}});"
