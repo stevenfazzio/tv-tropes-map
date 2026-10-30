@@ -1,8 +1,14 @@
-"""Render the map's interactive datamap to data/maps/map_<variant>.html.
+"""Render the interactive datamap.
 
-These pages stay local for now. The hovercards show the opening of each trope's
-own description, which a public version will need to settle: TV Tropes text is
-CC BY-NC-SA, so it can be shown with credit, or replaced by generated summaries.
+The map's own variant goes to docs/index.html, which GitHub Pages serves at
+stevenfazzio.com/tv-tropes-map/, with its data in zip files beside it: inlined,
+the page is several megabytes, too heavy for phones and for link-preview
+crawlers. Other variants render as single files to data/maps/map_<variant>.html,
+for comparing locally.
+
+The hovercards quote the opening of each trope's description. TV Tropes text is
+CC BY-NC-SA 3.0, so each card credits it, the title panel links the licence, and
+the published map is shared under the same licence.
 
 Colormaps, after DataMapPlot's own region colours:
 
@@ -16,6 +22,7 @@ Colormaps, after DataMapPlot's own region colours:
                     The hovercard gives each trope's rank in its region.
 
     uv run render.py                                    # the map's variant
+    uv run social_preview.py                            # its link-card image
     uv run render.py --variant plain --variant instructed
 """
 
@@ -29,11 +36,20 @@ import datamapplot
 import glasbey
 import pandas as pd
 
-from common import DATA, DUMP_SNAPSHOT, TROPES_PARQUET, write_bytes_atomic
+from common import DATA, DUMP_SNAPSHOT, ROOT, TROPES_PARQUET, write_bytes_atomic
 from embed import INSTRUCTIONS, MAP_VARIANT
 from features import FEATURES_PARQUET, FEW, OTHER, SPREAD, UNKNOWN
 
 MAPS = DATA / "maps"
+DOCS = ROOT / "docs"
+OUTPUT = DOCS / "index.html"
+# DataMapPlot names the data files <prefix>_point_data_0.zip and so on, and the page
+# fetches them by basename, so they sit beside index.html.
+DATA_PREFIX = "tropes"
+SOCIAL_PREVIEW = DOCS / "social-preview.png"
+PUBLIC_URL = "https://stevenfazzio.com/tv-tropes-map/"
+REPO_URL = "https://github.com/stevenfazzio/tv-tropes-map"
+LICENSE_URL = "https://creativecommons.org/licenses/by-nc-sa/3.0/"
 TITLE = "TV Tropes Map"
 # No digit-leading token: DataMapPlot writes the family name unquoted into CSS and
 # into deck.gl's canvas font string, where one is invalid.
@@ -64,6 +80,9 @@ CUSTOM_CSS = """
   color: #636c76; background: rgba(99, 108, 118, 0.08);
   border: 1px solid rgba(99, 108, 118, 0.15); border-radius: 12px;
 }
+.title-credit { margin-top: 8px; font-size: 11px; line-height: 1.3; color: #6b7280; }
+.title-credit a { color: inherit; text-decoration-color: rgba(107, 114, 128, 0.45); }
+.title-credit a:hover { color: #1f2328; }
 """
 
 # Same card grammar as the other maps: title, labelled fields in fixed places, then
@@ -102,6 +121,10 @@ def snippet(description: str) -> str:
     if len(text) <= SNIPPET_CHARS:
         return text
     return text[:SNIPPET_CHARS].rsplit(" ", 1)[0] + "…"
+
+
+def tropes_count(n: int) -> str:
+    return f"{n:,} trope" + ("" if n == 1 else "s")
 
 
 def ordinal(n: int) -> str:
@@ -157,15 +180,50 @@ def smallest_region(df: pd.DataFrame, label_cols: list[str]) -> pd.Series:
     return region
 
 
-def title_pills(variant: str) -> str:
+def title_extras(variant: str) -> str:
+    """Pills, then a credit line linking TV Tropes, the licence and the code."""
     year, month = DUMP_SNAPSHOT.split("-")
     month_name = pd.Timestamp(year=int(year), month=int(month), day=1).strftime("%B")
-    pills = [f"{month_name} {year} snapshot", f"{variant} embeddings", "Unofficial"]
+    pills = [f"{month_name} {year} snapshot", "Unofficial"]
+    if variant != MAP_VARIANT:  # only local comparison pages need to say which
+        pills.insert(1, f"{variant} embeddings")
     spans = "".join(f'<span class="title-pill">{html.escape(p)}</span>' for p in pills)
-    return f"<div>{spans}</div>"
+    # The cards credit TV Tropes too, but a hovercard can't hold a link.
+    credit = (
+        'Trope text from <a href="https://tvtropes.org/">TV Tropes</a> · '
+        f'Map and text <a href="{LICENSE_URL}">CC BY-NC-SA 3.0</a> · '
+        f'<a href="{REPO_URL}">Source code</a>'
+    )
+    return f'<div>{spans}</div><div class="title-credit">{credit}</div>'
+
+
+def open_graph_tags(n_tropes: int) -> str:
+    og = {
+        "og:title": TITLE,
+        "og:description": (
+            f"A data map of {n_tropes:,} tropes from the TV Tropes wiki, placed by "
+            "what each trope's description means and named at four zoom levels. "
+            "Pan, zoom, hover and search."
+        ),
+        "og:type": "website",
+        "og:url": PUBLIC_URL,
+        # Declared unconditionally: social_preview.py screenshots the rendered page,
+        # so the image is always produced after the HTML that names it.
+        "og:image": PUBLIC_URL + SOCIAL_PREVIEW.name,
+    }
+    tags = [
+        f'<meta property="{k}" content="{html.escape(v, quote=True)}">'
+        for k, v in og.items()
+    ]
+    tags.append(
+        f'<meta name="description" content="{html.escape(og["og:description"])}">'
+    )
+    tags.append('<meta name="twitter:card" content="summary_large_image">')
+    return "\n".join(tags)
 
 
 def render(variant: str, tropes: pd.DataFrame) -> None:
+    public = variant == MAP_VARIANT
     labels = pd.read_parquet(DATA / f"labels_{variant}.parquet")
     df = tropes.merge(labels, on="page", how="left", validate="1:1")
     assert len(df) == len(tropes), "merge changed the row count"
@@ -189,9 +247,9 @@ def render(variant: str, tropes: pd.DataFrame) -> None:
     region_size = grouped.transform("size")
     prominence = 100 * links.rank(pct=True)
 
-    linked = links.map(lambda n: f"{n:,} tropes")
+    linked = links.map(tropes_count)
     linked[in_region] = [
-        f"{n:,} tropes · {ordinal(r)} of {s:,} in its region"
+        f"{tropes_count(n)} · {ordinal(r)} of {s:,} in its region"
         for n, r, s in zip(links[in_region], region_rank, region_size)
     ]
     media = df["media_summary"].replace("", "—")
@@ -264,20 +322,33 @@ def render(variant: str, tropes: pd.DataFrame) -> None:
         tooltip_font_weight=400,
         custom_css=CUSTOM_CSS,
         noise_label="Unlabelled",
+        # The public page fetches its data from files beside it; DataMapPlot writes
+        # them here, during this call.
+        inline_data=not public,
+        offline_data_path=str(DOCS / DATA_PREFIX) if public else None,
     )
 
-    output = MAPS / f"map_{variant}.html"
-    MAPS.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=MAPS, suffix=".html")
+    output = OUTPUT if public else MAPS / f"map_{variant}.html"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=output.parent, suffix=".html")
     os.close(fd)
     try:
         fig.save(tmp)
         text = open(tmp, encoding="utf-8").read()
+        if public:
+            # After the charset declaration, which browsers only honour in the
+            # first 1024 bytes of the document.
+            anchor = re.search(r"<meta[^>]*charset[^>]*>", text) or re.search(
+                "<head>", text
+            )
+            assert anchor is not None, "no <head> in the rendered page"
+            at = anchor.end()
+            text = text[:at] + "\n" + open_graph_tags(len(df)) + text[at:]
         # Pills go inside the title panel, after the subtitle; the panel holds only
         # spans, so its first closing </div> is its own.
         text, n = re.subn(
             r'(<div\s+id="title-container"[^>]*>.*?)(</div>)',
-            lambda m: m.group(1) + title_pills(variant) + m.group(2),
+            lambda m: m.group(1) + title_extras(variant) + m.group(2),
             text,
             count=1,
             flags=re.DOTALL,
@@ -287,6 +358,17 @@ def render(variant: str, tropes: pd.DataFrame) -> None:
     finally:
         os.unlink(tmp)
     print(f"wrote {output} ({output.stat().st_size / 1e6:.2f} MB)")
+    if public:
+        # A smaller corpus writes fewer chunks; leftovers from a bigger one would
+        # sit in docs/ unused, so keep only the files this page fetches.
+        used = set(re.findall(rf"{DATA_PREFIX}_\w+?\.zip", text))
+        for path in DOCS.glob(f"{DATA_PREFIX}_*.zip"):
+            if path.name not in used:
+                path.unlink()
+        assert used and all((DOCS / f).exists() for f in used), "data files missing"
+        data_mb = sum((DOCS / f).stat().st_size for f in used) / 1e6
+        print(f"  + {len(used)} data files ({data_mb:.2f} MB): {sorted(used)}")
+        print(f"  next: uv run social_preview.py to refresh {SOCIAL_PREVIEW.name}")
 
 
 def main():

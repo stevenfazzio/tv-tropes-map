@@ -4,9 +4,10 @@ An interactive map of the 28,726 tropes on the [TV Tropes](https://tvtropes.org/
 wiki, placed by the meaning of each trope's description and named at four zoom
 levels.
 
-**Status:** work in progress. The map is currently built from a June 2023
-snapshot of the wiki and isn't published yet; the published version will come
-from a fresh crawl, parsed by the same code.
+**[Open the map](https://stevenfazzio.com/tv-tropes-map/)**
+
+**Status:** work in progress. The map is built from a June 2023 snapshot of the
+wiki; a fresh crawl, parsed by the same code, will replace it.
 
 This is an unofficial project and is not affiliated with TV Tropes. Clicking a
 point opens the trope on TV Tropes.
@@ -21,7 +22,7 @@ point opens the trope on TV Tropes.
 | Features | `features.py` | Each trope's primary medium (the one holding at least half its examples, after merging folder-name variants) and how many other tropes link to it |
 | Embed | `embed.py` | Qwen3-Embedding-8B, through [OpenRouter](https://openrouter.ai/) pinned to one provider, embeds title + description with a clustering instruction |
 | Cluster | `cluster.py` | UMAP to 2-d, then [Toponymy](https://github.com/TutteInstitute/toponymy) finds regions and Claude Opus 5.5 names them |
-| Render | `render.py` | [DataMapPlot](https://github.com/TutteInstitute/datamapplot) builds `data/maps/map_instructed.html`, with colormaps for primary medium and for prominence (how many other tropes link to each one) |
+| Render | `render.py` | [DataMapPlot](https://github.com/TutteInstitute/datamapplot) builds `docs/index.html`, which GitHub Pages serves, with its data in zip files beside it and colormaps for primary medium and for prominence (how many other tropes link to each one). `social_preview.py` screenshots it for the link card |
 
 Regions are found on the same 2-d layout that is plotted, so every named region
 matches something visible on the map.
@@ -61,20 +62,22 @@ uv run embed.py                           # ~6 min, ~$0.12 of embeddings
 uv run cluster.py --explore               # free: region counts at a few settings
 uv run cluster.py --min-cluster-size 30   # ~$8 of Claude Opus 5.5 naming
 uv run render.py
+uv run social_preview.py                  # link-card image; drives your installed Chrome
 ```
 
-Intermediate data lives in `data/` and is not committed. Embeddings and LLM
-responses are cached on disk, so re-running a stage does not repeat paid calls.
+Intermediate data lives in `data/` and is not committed; the published map in
+`docs/` is. Embeddings and LLM responses are cached on disk, so re-running a
+stage does not repeat paid calls.
 
 ## Licenses
 
 The code is released under the [MIT License](LICENSE).
 
 TV Tropes content is licensed [CC BY-NC-SA 3.0](https://creativecommons.org/licenses/by-nc-sa/3.0/).
-This repository contains none of it, but what the pipeline produces from it (the
-rendered maps, which quote the opening of each description, and the region
-names, which are written from the descriptions) is shared under that same
-license: non-commercially, with credit to TV Tropes. The TvTroper dump is
+The published map in `docs/` quotes the opening of each trope's description, and
+its region names are written from the descriptions, so it is shared under that
+same license: non-commercially, with credit to TV Tropes. The same goes for
+anything else the pipeline produces from TV Tropes text. The TvTroper dump is
 labelled Apache-2.0 on Hugging Face, but its content is TV Tropes text and keeps
 TV Tropes' license.
 
