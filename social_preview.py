@@ -20,9 +20,13 @@ from PIL import Image
 from playwright.sync_api import sync_playwright
 
 from common import write_bytes_atomic
-from render import DOCS, OUTPUT, SOCIAL_PREVIEW
+from render import DOCS, OUTPUT, SOCIAL_PREVIEW, ZOOM_SPEED
 
 OG_SIZE = (1200, 630)
+# deck.gl zooms by a function of delta * speed, so scaling the wheel delta against
+# the page's zoom speed keeps --zoom meaning the same framing if that speed changes.
+# The defaults below were chosen with 50 px ticks at deck.gl's own speed, 0.01.
+WHEEL_DELTA = 50 * 0.01 / ZOOM_SPEED
 SCALE = 2  # capture at 2x and downsample, so labels and points stay crisp
 SETTLE_MS = 8000
 
@@ -75,7 +79,7 @@ def main():
             page.wait_for_timeout(SETTLE_MS)
             for _ in range(args.zoom):
                 page.mouse.move(w / 2, h / 2)
-                page.mouse.wheel(0, -50)
+                page.mouse.wheel(0, -WHEEL_DELTA)
                 page.wait_for_timeout(150)
             if args.pan:
                 page.mouse.move(w / 2, h / 2)

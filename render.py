@@ -56,6 +56,16 @@ TITLE = "TV Tropes Map"
 FONT = "IBM Plex Sans"
 SNIPPET_CHARS = 240
 PROMINENCE_CMAP = "viridis"
+# DataMapPlot fixes deck.gl's scroll-zoom speed at 0.01 in datamap.js and offers no
+# option, so the page resets it once the map exists. deck.gl 9.1 scales the view by
+# 2 / (1 + e^-|delta * speed|) per wheel event, at most one zoom level: a mouse notch
+# (delta ~100) zooms 0.55 levels at 0.01 and 0.82 at 0.02, and a trackpad, whose
+# events carry small deltas, zooms about twice as fast.
+ZOOM_SPEED = 0.02
+SET_ZOOM_SPEED = (
+    "datamap.deckgl.setProps({controller: "
+    f"{{scrollZoom: {{speed: {ZOOM_SPEED}, smooth: true}}}}}});"
+)
 
 # Non-answers get greys so the media carry the colour; each grey differs, because
 # the legend selects points by matching colours. "Spread across media" is most of
@@ -321,6 +331,7 @@ def render(variant: str, tropes: pd.DataFrame) -> None:
         tooltip_font_family=FONT,
         tooltip_font_weight=400,
         custom_css=CUSTOM_CSS,
+        custom_js=SET_ZOOM_SPEED,
         noise_label="Unlabelled",
         # The public page fetches its data from files beside it; DataMapPlot writes
         # them here, during this call.
