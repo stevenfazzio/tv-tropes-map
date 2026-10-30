@@ -158,6 +158,14 @@ def parse_page(item: tuple[str, str]) -> dict:
             folder_items.append(folder_examples(label))
 
     name = row["canonical_name"]
+    # Every Main/ page the article links to, description and examples alike, by
+    # wiki name; that name is often an alternate one, which features.py resolves
+    # before counting each trope's inbound links.
+    main_links = {
+        r[1]
+        for href in article.xpath(".//a/@href")
+        if (r := page_ref(href)) and r[0] == "Main"
+    }
     links_to_main, links_elsewhere, example_subpages = 0, 0, set()
     for el in after:
         for href in el.xpath(".//a/@href"):
@@ -193,6 +201,7 @@ def parse_page(item: tuple[str, str]) -> dict:
         "title": clean(h1[0].text_content()) if h1 else None,
         "description": "\n\n".join(description),
         "headings": [clean(h.text_content()) for h in article.xpath(".//h2")],
+        "main_links": sorted(main_links - {name}),
         "folder_labels": folder_labels,
         "folder_items": folder_items,
         "loose_items": sum(

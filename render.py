@@ -1,8 +1,19 @@
-"""Render a variant's interactive datamap to data/maps/map_<variant>.html.
+"""Render the map's interactive datamap to data/maps/map_<variant>.html.
 
 These pages stay local for now. The hovercards show the opening of each trope's
 own description, which a public version will need to settle: TV Tropes text is
 CC BY-NC-SA, so it can be shown with credit, or replaced by generated summaries.
+
+Colormaps, after DataMapPlot's own region colours:
+
+    Primary medium  the medium holding at least half of a trope's examples
+                    (features.py); most tropes are spread, in pale grey, so the
+                    colours show where medium-specific tropes are
+    Prominence      links from other tropes, as a percentile of all tropes. Not
+                    also ranked within regions: link counts barely depend on
+                    region (it explains ~8% of the variance in log links), so a
+                    regional ranking came out almost the same (Spearman 0.95).
+                    The hovercard gives each trope's rank in its region.
 
     uv run render.py                                    # the map's variant
     uv run render.py --variant plain --variant instructed
@@ -15,10 +26,12 @@ import re
 import tempfile
 
 import datamapplot
+import glasbey
 import pandas as pd
 
 from common import DATA, DUMP_SNAPSHOT, TROPES_PARQUET, write_bytes_atomic
 from embed import INSTRUCTIONS, MAP_VARIANT
+from features import FEATURES_PARQUET, FEW, OTHER, SPREAD, UNKNOWN
 
 MAPS = DATA / "maps"
 TITLE = "TV Tropes Map"
@@ -26,6 +39,17 @@ TITLE = "TV Tropes Map"
 # into deck.gl's canvas font string, where one is invalid.
 FONT = "IBM Plex Sans"
 SNIPPET_CHARS = 240
+PROMINENCE_CMAP = "viridis"
+
+# Non-answers get greys so the media carry the colour; each grey differs, because
+# the legend selects points by matching colours. "Spread across media" is most of
+# the map, so it gets the palest.
+NEUTRAL_COLORS = {
+    SPREAD: "#d9d9d9",
+    UNKNOWN: "#ececec",
+    FEW: "#bdbdbd",
+    OTHER: "#8c8c8c",
+}
 
 # DataMapPlot sets line-height 0.95 on its panels, so a wrapped title's descenders
 # run into the subtitle. The pills match sep-map's.
@@ -43,15 +67,23 @@ CUSTOM_CSS = """
 """
 
 # Same card grammar as the other maps: title, labelled fields in fixed places, then
-# the description, then a muted credit line.
+# the description, then a muted credit line. The media dot uses the Primary medium
+# colormap's colour, so a card reads against that legend.
+DOT = (
+    "display: inline-block; width: 8px; height: 8px; border-radius: 50%; "
+    "margin-right: 6px; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.15); "
+    "background: {color};"
+)
 FIELD_NAME = "color: #6b7280; font-size: 11px; padding-top: 1px;"
 HOVER_TEMPLATE = f"""
 <div style="max-width: 340px; white-space: normal; font-weight: 400; color: #1f2328;">
   <div style="font-weight: 600; font-size: 15px; line-height: 1.25;">{{title}}</div>
-  <div style="display: grid; grid-template-columns: 62px minmax(0, 1fr);
+  <div style="display: grid; grid-template-columns: 74px minmax(0, 1fr);
     gap: 3px 10px; margin-top: 6px; font-size: 12px; line-height: 1.35;">
     <div style="{FIELD_NAME}">Also called</div><div>{{aliases}}</div>
-    <div style="{FIELD_NAME}">Most in</div><div>{{media}}</div>
+    <div style="{FIELD_NAME}">Media</div>
+    <div><span style="{DOT.format(color="{medium_dot}")}"></span>{{media}}</div>
+    <div style="{FIELD_NAME}">Linked from</div><div>{{linked}}</div>
   </div>
   <div style="font-size: 13px; margin-top: 8px; padding-top: 7px;
     border-top: 1px solid #e5e7eb; line-height: 1.4;">{{snippet}}</div>
@@ -72,24 +104,57 @@ def snippet(description: str) -> str:
     return text[:SNIPPET_CHARS].rsplit(" ", 1)[0] + "…"
 
 
-def top_media(labels, items, media: set[str], n: int = 3) -> str:
-    ranked = sorted(
-        ((label, count) for label, count in zip(labels, items) if label in media),
-        key=lambda lc: -lc[1],
+def ordinal(n: int) -> str:
+    suffix = (
+        "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
     )
-    return " · ".join(label for label, count in ranked[:n] if count > 0) or "—"
+    return f"{n:,}{suffix}"
 
 
-def media_folders(tropes: pd.DataFrame, min_tropes: int = 1000) -> set[str]:
-    # Most pages folder their examples by medium, but some fold by franchise or by
-    # subtype ("Pretty Cure"). Media folders recur across thousands of pages and
-    # the others rarely do, so a frequency floor keeps only media. The spelling
-    # variants ("Anime and Manga", "Anime & Manga") still need merging before
-    # medium can be a colormap.
-    counts = pd.Series(
-        [label for labels in tropes["folder_labels"] for label in set(labels)]
-    ).value_counts()
-    return set(counts[counts >= min_tropes].index)
+def categorical_palette(n_colors: int, avoid: list[str]) -> list[str]:
+    """n_colors glasbey colours, each also kept distinct from the `avoid` colours."""
+    # Seeded with the greys already in use, so glasbey doesn't hand out a muted
+    # colour that reads as one of them.
+    palette = glasbey.extend_palette(
+        avoid,
+        palette_size=len(avoid) + n_colors,
+        colorblind_safe=True,
+        # glasbey's default, moderate red-green CVD.
+        cvd_severity=50.0,
+        # A floor of 35: near-black colours are distinct as swatches but read as
+        # the same colour as small dots.
+        lightness_bounds=(35, 75),
+        chroma_bounds=(20, 90),
+        # Always explicit: left unset, glasbey takes the hue range from a seed
+        # palette of four or more colours, and four greys span no hues.
+        hue_bounds=(0, 360),
+    )
+    return palette[len(avoid) :]
+
+
+def color_mapping(values: pd.Series) -> dict[str, str]:
+    """Category -> colour, assigned most frequent first (glasbey's earliest colours
+    are its most distinct)."""
+    order = values.value_counts().index.tolist()
+    named = [c for c in order if c not in NEUTRAL_COLORS]
+    neutrals = {c: NEUTRAL_COLORS[c] for c in order if c in NEUTRAL_COLORS}
+    mapping = dict(zip(named, categorical_palette(len(named), list(neutrals.values()))))
+    mapping.update(neutrals)
+    # The legend selects points by colour, so no two categories may share one.
+    assert len(set(mapping.values())) == len(mapping), (
+        f"two categories share a colour: {mapping}"
+    )
+    return mapping
+
+
+def smallest_region(df: pd.DataFrame, label_cols: list[str]) -> pd.Series:
+    """Each trope's finest named region, keyed by (layer, name); None if unnamed at
+    every layer. Names repeat across layers, so the layer is part of the key."""
+    region = pd.Series(None, index=df.index, dtype=object)
+    for i, col in enumerate(label_cols):  # finest first
+        unset = region.isna() & (df[col] != "Unlabelled")
+        region[unset] = f"{i}:" + df.loc[unset, col]
+    return region
 
 
 def title_pills(variant: str) -> str:
@@ -106,26 +171,6 @@ def render(variant: str, tropes: pd.DataFrame) -> None:
     assert len(df) == len(tropes), "merge changed the row count"
     assert df["x"].notna().all(), "some tropes have no coordinates"
 
-    aliases = df["aliases"].map(lambda a: [wiki_words(x) for x in a])
-    media = media_folders(df)
-    extra = pd.DataFrame(
-        {
-            # DataMapPlot puts these into the card as raw HTML, so escape them all.
-            "title": df["title"].map(html.escape),
-            "aliases": aliases.map(
-                lambda a: html.escape(", ".join(a[:3])) if a else "—"
-            ),
-            "media": [
-                html.escape(top_media(names, counts, media))
-                for names, counts in zip(df["folder_labels"], df["folder_items"])
-            ],
-            "snippet": df["description"].map(snippet).map(html.escape),
-            "url": df["url"],
-            # Alternate names are how many tropes get searched for ("Absent Dad").
-            "search_text": df["title"] + " " + aliases.map(" ".join),
-        }
-    )
-
     label_cols = sorted(
         (c for c in df.columns if c.startswith("label_layer_")),
         key=lambda c: int(c.rsplit("_", 1)[1]),  # numeric: _10 must sort after _2
@@ -134,6 +179,66 @@ def render(variant: str, tropes: pd.DataFrame) -> None:
     n_finest = pd.Series(label_layers[0]).nunique()
     n_coarsest = pd.Series(label_layers[-1]).nunique()
     assert n_finest >= n_coarsest, "label layers must be finest-first for DataMapPlot"
+
+    medium_colors = color_mapping(df["primary_medium"])
+    links = df["inbound_links"]
+    region = smallest_region(df, label_cols)
+    in_region = region.notna()
+    grouped = links[in_region].groupby(region[in_region])
+    region_rank = grouped.rank(ascending=False, method="min").astype(int)
+    region_size = grouped.transform("size")
+    prominence = 100 * links.rank(pct=True)
+
+    linked = links.map(lambda n: f"{n:,} tropes")
+    linked[in_region] = [
+        f"{n:,} tropes · {ordinal(r)} of {s:,} in its region"
+        for n, r, s in zip(links[in_region], region_rank, region_size)
+    ]
+    media = df["media_summary"].replace("", "—")
+    media[df["primary_medium"] == FEW] += " (few examples)"
+
+    aliases = df["aliases"].map(lambda a: [wiki_words(x) for x in a])
+    extra = pd.DataFrame(
+        {
+            # DataMapPlot puts these into the card as raw HTML, so escape them all.
+            "title": df["title"].map(html.escape),
+            "aliases": aliases.map(
+                lambda a: html.escape(", ".join(a[:3])) if a else "—"
+            ),
+            "media": media.map(html.escape),
+            "medium_dot": df["primary_medium"].map(medium_colors),
+            "linked": linked.map(html.escape),
+            "snippet": df["description"].map(snippet).map(html.escape),
+            "url": df["url"],
+            # Alternate names are how many tropes get searched for ("Absent Dad").
+            "search_text": df["title"] + " " + aliases.map(" ".join),
+        }
+    )
+
+    colormap_rawdata = [
+        df["primary_medium"].to_numpy(),
+        prominence.to_numpy(),
+    ]
+    colormap_metadata = [
+        {
+            "field": "medium",
+            "description": "Primary medium",
+            "kind": "categorical",
+            # An explicit mapping, so the hovercard dots match the map exactly.
+            "color_mapping": medium_colors,
+        },
+        {
+            "field": "prominence",
+            "description": "Prominence (percentile)",
+            "kind": "continuous",
+            "cmap": PROMINENCE_CMAP,
+            # The colourbar spaces its ticks evenly between the range's ends. Left
+            # to the data, the bottom is 0.7 (the tie of unlinked tropes) and the
+            # ticks land on 25.5, 50.3, ...; pinned, they read 0, 25, 50, 75, 100.
+            "vmin": 0,
+            "vmax": 100,
+        },
+    ]
 
     fig = datamapplot.create_interactive_plot(
         df[["x", "y"]].to_numpy(),
@@ -144,10 +249,14 @@ def render(variant: str, tropes: pd.DataFrame) -> None:
         on_click="window.open(`{url}`)",
         enable_search=True,
         search_field="search_text",
+        colormap_rawdata=colormap_rawdata,
+        colormap_metadata=colormap_metadata,
         cvd_safer=True,
         title=TITLE,
         # Nothing else says clicking works: deck.gl shows a grab cursor on points.
-        sub_title=f"{len(df):,} tropes, placed by the meaning of their descriptions. Click one to open it.",
+        # Short enough to stay on one line at 1280 px, where a second line makes
+        # the panel cover the top region label.
+        sub_title=f"{len(df):,} tropes, placed by what they mean. Click one to open it.",
         title_font_size=24,
         sub_title_font_size=13,
         font_family=FONT,
@@ -185,16 +294,12 @@ def main():
     parser.add_argument("--variant", choices=list(INSTRUCTIONS), action="append")
     args = parser.parse_args()
     tropes = pd.read_parquet(
-        TROPES_PARQUET,
-        columns=[
-            "page",
-            "title",
-            "description",
-            "aliases",
-            "folder_labels",
-            "folder_items",
-            "url",
-        ],
+        TROPES_PARQUET, columns=["page", "title", "description", "aliases", "url"]
+    )
+    features = pd.read_parquet(FEATURES_PARQUET)
+    tropes = tropes.merge(features, on="page", how="left", validate="1:1")
+    assert tropes["primary_medium"].notna().all(), (
+        "features out of sync with tropes; re-run features.py"
     )
     for variant in args.variant or [MAP_VARIANT]:
         render(variant, tropes)

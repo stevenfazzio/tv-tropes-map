@@ -18,9 +18,10 @@ point opens the trope on TV Tropes.
 | Fetch | `fetch_dump.py` | Downloads only the `Main/` namespace (2.2 GB) of the [TvTroper](https://huggingface.co/datasets/RyokoExtra/TvTroper) dump, using HTTP range requests into its 20.7 GB zip, and checks it against the zip's CRC. Nothing is fetched from tvtropes.org |
 | Parse | `parse.py` | One row per page (32,981 from 46,654 URLs): description, example folders, indexes, subpages; redirects are folded in as alternate names |
 | Select | `select_tropes.py` | Keeps pages with examples or a definition-only note, then drops indexes and period lists of works, printing a drop count for each rule: 28,726 tropes |
+| Features | `features.py` | Each trope's primary medium (the one holding at least half its examples, after merging folder-name variants) and how many other tropes link to it |
 | Embed | `embed.py` | Qwen3-Embedding-8B, through [OpenRouter](https://openrouter.ai/) pinned to one provider, embeds title + description with a clustering instruction |
 | Cluster | `cluster.py` | UMAP to 2-d, then [Toponymy](https://github.com/TutteInstitute/toponymy) finds regions and Claude Opus 5.5 names them |
-| Render | `render.py` | [DataMapPlot](https://github.com/TutteInstitute/datamapplot) builds `data/maps/map_instructed.html` |
+| Render | `render.py` | [DataMapPlot](https://github.com/TutteInstitute/datamapplot) builds `data/maps/map_instructed.html`, with colormaps for primary medium and for prominence (how many other tropes link to each one) |
 
 Regions are found on the same 2-d layout that is plotted, so every named region
 matches something visible on the map.
@@ -48,6 +49,7 @@ Requires [uv](https://docs.astral.sh/uv/), `OPENROUTER_API_KEY` and
 uv run fetch_dump.py                      # 2.2 GB download
 uv run parse.py                           # ~45 s
 uv run select_tropes.py
+uv run features.py
 uv run embed.py                           # ~6 min, ~$0.12 of embeddings
 uv run cluster.py --explore               # free: region counts at a few settings
 uv run cluster.py --min-cluster-size 30   # ~$8 of Claude Opus 5.5 naming
