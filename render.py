@@ -232,6 +232,16 @@ def open_graph_tags(n_tropes: int) -> str:
     return "\n".join(tags)
 
 
+# Plausible analytics: the one site that covers all of stevenfazzio.com. The script
+# ignores localhost and file:// pages, so local previews stay out of the stats.
+PLAUSIBLE_SNIPPET = """<!-- Privacy-friendly analytics by Plausible -->
+<script async src="https://plausible.io/js/pa-dvmKWiL1gpqH63wOvMp-g.js"></script>
+<script>
+  window.plausible=window.plausible||function(){(plausible.q=plausible.q||[]).push(arguments)},plausible.init=plausible.init||function(i){plausible.o=i||{}};
+  plausible.init()
+</script>"""
+
+
 def render(variant: str, tropes: pd.DataFrame) -> None:
     public = variant == MAP_VARIANT
     labels = pd.read_parquet(DATA / f"labels_{variant}.parquet")
@@ -354,7 +364,7 @@ def render(variant: str, tropes: pd.DataFrame) -> None:
             )
             assert anchor is not None, "no <head> in the rendered page"
             at = anchor.end()
-            text = text[:at] + "\n" + open_graph_tags(len(df)) + text[at:]
+            text = text[:at] + "\n" + open_graph_tags(len(df)) + "\n" + PLAUSIBLE_SNIPPET + text[at:]
         # Pills go inside the title panel, after the subtitle; the panel holds only
         # spans, so its first closing </div> is its own.
         text, n = re.subn(
